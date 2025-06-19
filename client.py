@@ -13,8 +13,6 @@ class Clerk:
         self.servers = servers
         self.cfg = cfg
 
-        # Your definitions here.
-
     # Fetch the current value for a key.
     # Returns "" if the key does not exist.
     # Keeps trying forever in the face of all other errors.
@@ -27,8 +25,16 @@ class Clerk:
     # must match the declared types of the RPC handler function's
     # arguments in server.py.
     def get(self, key: str) -> str:
-        # You will have to modify this function.
-        return ""
+        args = GetArgs(key)
+        while True:
+            for srv in self.servers:
+                try:
+                    reply: GetReply = srv.call("KVServer.Get", args)
+                    if reply is not None:
+                        return reply.value
+                except Exception:
+                    # failed, try next server
+                    pass
 
     # Shared by Put and Append.
     #
@@ -40,8 +46,15 @@ class Clerk:
     # must match the declared types of the RPC handler function's
     # arguments in server.py.
     def put_append(self, key: str, value: str, op: str) -> str:
-        # You will have to modify this function.
-        return ""
+        args = PutAppendArgs(key, value)
+        while True:
+            for srv in self.servers:
+                try:
+                    reply: PutAppendReply = srv.call(f"KVServer.{op}", args)
+                    if reply is not None:
+                        return reply.value
+                except Exception:
+                    pass
 
     def put(self, key: str, value: str):
         self.put_append(key, value, "Put")
