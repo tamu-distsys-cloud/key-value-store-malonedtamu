@@ -8,12 +8,26 @@ from server import GetArgs, GetReply, PutAppendArgs, PutAppendReply
 def nrand() -> int:
     return random.getrandbits(62)
 
+def shard_index(key: str, nshards: int) -> int:
+    try:
+        return int(key) % nshards
+    except ValueError:
+        return 0
+
 class Clerk:
     def __init__(self, servers: List[ClientEnd], cfg):
         self.servers = servers
         self.cfg = cfg
         self.client_id = nrand()
         self.seq_id = 0
+
+    def replica_idx(self, key: str):
+        indices = []
+        primary = shard_index(key, self.cfg.nservers) # shard primary
+        for i in range(self.cfg.nreplicas):
+            idx = (primary + i) % self.cfg.nservers
+            indices.append(idx)
+        return indices
 
     # Fetch the current value for a key.
     # Returns "" if the key does not exist.
@@ -29,14 +43,32 @@ class Clerk:
     def get(self, key: str) -> str:
         args = GetArgs(key)
         while True:
-            for srv in self.servers:
+            wrong = True  # this assumes all will say wrong shard
+            for idx in self.replica_idx(key):
                 try:
-                    reply: GetReply = srv.call("KVServer.Get", args)
-                    if reply is not None:
-                        return reply.value
-                except Exception:
-                    # failed, try next server
-                    pass
+                    rep: GetReply = self.servers[idx].call("KVServer.Get", args)
+
+                    if rep is None:  # keep trying
+                        wrong = False
+                        continue
+
+                    if rep.err == "ErrWrongShard": # rewrote error handling to fix TestRejection hanging after passing
+                        # server reached but not the right shard
+                        continue  # move on to next replica
+
+                    return rep.value # passed
+
+                except TimeoutError:
+                    wrong = False  # keep looping
+                except RuntimeError as e:
+                    if "wrong shard" in str(e):
+                        continue  # treat like ErrWrongShard
+                    wrong = False  # other error
+
+            if wrong:
+                # all returned error wrong shard
+                # caller dies
+                raise RuntimeError("wrong shard")
 
     # Shared by Put and Append.
     #
@@ -51,9 +83,9 @@ class Clerk:
         self.seq_id += 1
         args = PutAppendArgs(key, value, self.client_id, self.seq_id)
         while True:
-            for srv in self.servers:
+            for idx in self.replica_idx(key):
                 try:
-                    reply: PutAppendReply = srv.call(f"KVServer.{op}", args)
+                    reply: PutAppendReply = self.servers[idx].call(f"KVServer.{op}", args)
                     if reply is not None:
                         return reply.value
                 except Exception:
