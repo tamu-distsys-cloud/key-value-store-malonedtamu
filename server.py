@@ -12,9 +12,11 @@ def debug(format, *args):
 # Put or Append
 class PutAppendArgs:
     # Add definitions here if needed
-    def __init__(self, key, value):
+    def __init__(self, key, value, client_id, seq_id):
         self.key = key
         self.value = value
+        self.client_id = client_id
+        self.seq_id = seq_id
 
 class PutAppendReply:
     # Add definitions here if needed
@@ -36,6 +38,7 @@ class KVServer:
         self.mu = threading.Lock()
         self.cfg = cfg
         self.data = {} # dict for key val pairs
+        self.dupes = {} # dict for client_id and seq_id pairs
 
     def Get(self, args: GetArgs) -> GetReply:
         with self.mu:
@@ -44,13 +47,25 @@ class KVServer:
 
     def Put(self, args: PutAppendArgs) -> PutAppendReply:
         with self.mu:
+            # Check for duplicate request
+            last = self.dupes.get(args.client_id)
+            if last and args.seq_id <= last[0]: # duplicate request
+                return PutAppendReply(last[1]) # return last reply
+
+            old_val = self.data.get(args.key, "")   # value before update
             self.data[args.key] = args.value
 
-        return PutAppendReply(args.value)
+        self.dupes[args.client_id] = (args.seq_id, old_val)  # remember latest request
+        return PutAppendReply(old_val)
 
     def Append(self, args: PutAppendArgs) -> PutAppendReply:
         with self.mu:
-            old = self.data.get(args.key, "")
-            self.data[args.key] = old + args.value
+            last = self.dupes.get(args.client_id)
+            if last and args.seq_id <= last[0]: # duplicate request
+                return PutAppendReply(last[1]) # return last reply
 
-        return PutAppendReply(args.value)
+            old_val = self.data.get(args.key, "")
+            self.data[args.key] = old_val + args.value
+
+        self.dupes[args.client_id] = (args.seq_id, old_val)  # remember latest request
+        return PutAppendReply(old_val)
